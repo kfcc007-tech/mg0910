@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Supabase 실시간 지점별 금융 현황 대시보드">
+  <title>지점별 금융 현황 대시보드</title>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.57.4/dist/umd/supabase.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.0/dist/chart.umd.min.js"></script>
+  <style>
+    :root { --ink:#172033; --muted:#6b7485; --bg:#f4f6fa; --card:#fff; --line:#e5e9f1; --blue:#2368d8; --cyan:#36a7c7; --orange:#ec8b35; --red:#d64f4f; }
+    * { box-sizing:border-box; }
+    body { margin:0; color:var(--ink); background:var(--bg); font-family:Inter,"Noto Sans KR",system-ui,-apple-system,sans-serif; }
+    button { font:inherit; }
+    .wrap { max-width:1320px; margin:auto; padding:30px 22px 56px; }
+    header { display:flex; align-items:flex-end; justify-content:space-between; gap:20px; margin-bottom:22px; }
+    h1 { margin:0 0 7px; font-size:clamp(27px,4vw,40px); letter-spacing:-.045em; }
+    .sub { margin:0; color:var(--muted); }
+    .actions { display:flex; align-items:center; gap:12px; }
+    .updated { color:var(--muted); font-size:13px; white-space:nowrap; }
+    .refresh { border:0; border-radius:10px; padding:11px 15px; color:#fff; background:var(--ink); font-weight:750; cursor:pointer; }
+    .refresh:disabled { opacity:.55; cursor:wait; }
+    .notice { min-height:22px; margin:0 0 14px; color:var(--muted); font-size:14px; }
+    .notice.error { color:#b42318; }
+    .cards { display:grid; grid-template-columns:repeat(4,1fr); gap:14px; margin-bottom:18px; }
+    .card,.panel { background:var(--card); border:1px solid var(--line); border-radius:16px; box-shadow:0 7px 22px rgba(27,41,70,.05); }
+    .card { padding:20px; border-top:4px solid var(--blue); }
+    .card:nth-child(2) { border-top-color:var(--cyan); }
+    .card:nth-child(3) { border-top-color:var(--orange); }
+    .card:nth-child(4) { border-top-color:var(--red); }
+    .label { display:block; color:var(--muted); font-size:13px; margin-bottom:9px; }
+    .value { display:block; font-size:clamp(23px,3vw,32px); letter-spacing:-.035em; font-variant-numeric:tabular-nums; }
+    .unit { color:var(--muted); font-size:14px; font-weight:500; margin-left:3px; }
+    .charts { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:18px; }
+    .panel { padding:20px; min-width:0; }
+    .panel.wide { grid-column:1/-1; }
+    .panel-head { display:flex; justify-content:space-between; gap:14px; align-items:center; margin-bottom:12px; }
+    h2 { margin:0; font-size:18px; letter-spacing:-.02em; }
+    .hint { color:var(--muted); font-size:12px; }
+    .chart-box { position:relative; height:310px; }
+    .table-wrap { overflow:auto; }
+    table { width:100%; min-width:760px; border-collapse:collapse; font-size:14px; }
+    th,td { padding:12px 13px; border-bottom:1px solid var(--line); text-align:right; font-variant-numeric:tabular-nums; }
+    th { color:var(--muted); background:#f8fafc; font-weight:700; }
+    th:first-child,td:first-child { text-align:left; }
+    td:first-child { font-weight:750; }
+    .overdue { color:var(--red); font-weight:800; }
+    .skeleton { animation:pulse 1.2s ease-in-out infinite; color:transparent; background:#e9edf3; border-radius:6px; }
+    @keyframes pulse { 50% { opacity:.55; } }
+    @media (max-width:900px) { .cards { grid-template-columns:repeat(2,1fr); } .charts { grid-template-columns:1fr; } }
+    @media (max-width:600px) { .wrap { padding:22px 14px 40px; } header { align-items:flex-start; flex-direction:column; } .actions { width:100%; justify-content:space-between; } .cards { grid-template-columns:1fr; } .chart-box { height:290px; } }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <header>
+      <div>
+        <h1>지점별 금융 현황</h1>
+        <p class="sub">조합원·수신·여신·연체 현황을 지점별로 비교합니다.</p>
+      </div>
+      <div class="actions">
+        <span class="updated" id="updated">불러오는 중</span>
+        <button class="refresh" id="refresh" type="button">새로고침</button>
+      </div>
+    </header>
+
+    <p class="notice" id="notice" role="status" aria-live="polite">Supabase에서 최신 데이터를 조회하고 있습니다…</p>
+
+    <section class="cards" aria-label="전체 요약">
+      <article class="card"><span class="label">전체 조합원</span><strong class="value skeleton" id="members">000<span class="unit">명</span></strong></article>
+      <article class="card"><span class="label">예적금 총액</span><strong class="value skeleton" id="deposits">000<span class="unit">원</span></strong></article>
+      <article class="card"><span class="label">대출 총액</span><strong class="value skeleton" id="loans">000<span class="unit">원</span></strong></article>
+      <article class="card"><span class="label">연체 대출</span><strong class="value skeleton" id="overdue">000<span class="unit">건</span></strong></article>
+    </section>
+
+    <section class="charts">
+      <article class="panel">
+        <div class="panel-head"><h2>지점별 조합원 수</h2><span class="hint">단위: 명</span></div>
+        <div class="chart-box"><canvas id="memberChart"></canvas></div>
+      </article>
+      <article class="panel">
+        <div class="panel-head"><h2>지점별 예적금 총액</h2><span class="hint">단위: 백만원</span></div>
+        <div class="chart-box"><canvas id="depositChart"></canvas></div>
+      </article>
+      <article class="panel wide">
+        <div class="panel-head"><h2>지점별 대출 총액과 연체 건수</h2><span class="hint">금액: 백만원 · 연체: 건</span></div>
+        <div class="chart-box"><canvas id="loanChart"></canvas></div>
+      </article>
+      <article class="panel wide">
+        <div class="panel-head"><h2>지점별 상세 현황</h2><span class="hint">현재 조회 결과</span></div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>지점</th><th>조합원</th><th>예적금 총액</th><th>대출 총액</th><th>연체</th></tr></thead>
+            <tbody id="tableBody"></tbody>
+          </table>
+        </div>
+      </article>
+    </section>
+  </main>
+
+  <script>
+    const SUPABASE_URL = 'https://hpvkmvcfjldhhzgrvlmg.supabase.co';
+    const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_rK59Abyi9MsEH5KuGr8DYw_gHPs9_4f';
+    const db = window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
+    const charts = {};
+    const won = new Intl.NumberFormat('ko-KR');
+    const byId = id => document.getElementById(id);
+    const shortBranch = name => String(name).replace('지점','');
+
+    async function fetchDashboard() {
+      setLoading(true);
+      try {
+        const [branchesRes, membersRes, depositsRes, loansRes] = await Promise.all([
+          db.from('branches').select('branch_id, branch_name').order('branch_id'),
+          db.from('members').select('member_id, branch_id'),
+          db.from('deposit_accounts').select('account_id, branch_id, balance'),
+          db.from('loans').select('loan_id, branch_id, loan_amount, status')
+        ]);
+        const failed = [branchesRes, membersRes, depositsRes, loansRes].find(result => result.error);
+        if (failed) throw failed.error;
+        const data = aggregate(branchesRes.data, membersRes.data, depositsRes.data, loansRes.data);
+        render(data);
+        byId('notice').textContent = `${data.length}개 지점의 최신 데이터를 조회했습니다.`;
+        byId('updated').textContent = `갱신 ${new Date().toLocaleString('ko-KR')}`;
+      } catch (error) {
+        console.error(error);
+        byId('notice').className = 'notice error';
+        byId('notice').textContent = `데이터 조회에 실패했습니다: ${error.message || '연결 상태를 확인해 주세요.'}`;
+        byId('updated').textContent = '갱신 실패';
+      } finally { setLoading(false); }
+    }
+
+    function aggregate(branches, members, deposits, loans) {
+      return branches.map(branch => ({
+        id: branch.branch_id,
+        name: branch.branch_name,
+        members: members.filter(row => row.branch_id === branch.branch_id).length,
+        deposits: deposits.filter(row => row.branch_id === branch.branch_id).reduce((sum,row) => sum + Number(row.balance || 0), 0),
+        loans: loans.filter(row => row.branch_id === branch.branch_id).reduce((sum,row) => sum + Number(row.loan_amount || 0), 0),
+        overdue: loans.filter(row => row.branch_id === branch.branch_id && row.status === '연체').length
+      }));
+    }
+
+    function render(data) {
+      const total = key => data.reduce((sum,row) => sum + row[key], 0);
+      setMetric('members', won.format(total('members')), '명');
+      setMetric('deposits', won.format(total('deposits')), '원');
+      setMetric('loans', won.format(total('loans')), '원');
+      setMetric('overdue', won.format(total('overdue')), '건');
+      const labels = data.map(row => shortBranch(row.name));
+      drawChart('memberChart', { type:'bar', labels, datasets:[barSet('조합원 수', data.map(row => row.members), '#2368d8')] });
+      drawChart('depositChart', { type:'bar', labels, datasets:[barSet('예적금 총액', data.map(row => row.deposits / 1e6), '#36a7c7')] });
+      drawChart('loanChart', { type:'bar', labels, datasets:[barSet('대출 총액', data.map(row => row.loans / 1e6), '#ec8b35'), { type:'line', label:'연체 건수', data:data.map(row => row.overdue), yAxisID:'overdueAxis', borderColor:'#d64f4f', backgroundColor:'#d64f4f', pointRadius:5, pointHoverRadius:7, tension:.25 }] }, true);
+      byId('tableBody').innerHTML = data.map(row => `<tr><td>${escapeHtml(row.name)}</td><td>${won.format(row.members)}명</td><td>${won.format(row.deposits)}원</td><td>${won.format(row.loans)}원</td><td class="overdue">${won.format(row.overdue)}건</td></tr>`).join('');
+    }
+
+    function barSet(label, data, color) { return { label, data, backgroundColor:color, borderRadius:7, maxBarThickness:48 }; }
+
+    function drawChart(id, config, dualAxis=false) {
+      if (charts[id]) charts[id].destroy();
+      charts[id] = new Chart(byId(id), {
+        type:config.type, data:{ labels:config.labels, datasets:config.datasets },
+        options:{ responsive:true, maintainAspectRatio:false, interaction:{ mode:'index', intersect:false }, plugins:{ legend:{ display:config.datasets.length > 1, labels:{ usePointStyle:true, boxWidth:8 } }, tooltip:{ callbacks:{ label:ctx => `${ctx.dataset.label}: ${won.format(ctx.parsed.y)}${ctx.dataset.yAxisID === 'overdueAxis' ? '건' : id === 'memberChart' ? '명' : '백만원'}` } } }, scales:{ x:{ grid:{ display:false }, ticks:{ color:'#596579' } }, y:{ beginAtZero:true, grid:{ color:'#edf0f5' }, ticks:{ precision:0, color:'#7a8494' } }, ...(dualAxis ? { overdueAxis:{ beginAtZero:true, position:'right', grid:{ drawOnChartArea:false }, ticks:{ precision:0, color:'#d64f4f' } } } : {}) } }
+      });
+    }
+
+    function setMetric(id, value, unit) { byId(id).classList.remove('skeleton'); byId(id).innerHTML = `${value}<span class="unit">${unit}</span>`; }
+    function setLoading(active) { byId('refresh').disabled = active; byId('notice').className = 'notice'; if (active) byId('notice').textContent = 'Supabase에서 최신 데이터를 조회하고 있습니다…'; }
+    function escapeHtml(value) { return String(value).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+    byId('refresh').addEventListener('click', fetchDashboard);
+    window.addEventListener('DOMContentLoaded', fetchDashboard);
+  </script>
+</body>
+</html>
